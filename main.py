@@ -1,38 +1,65 @@
 import os
 import asyncio
+from datetime import datetime
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 
-# Налаштування
 TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = os.getenv("ADMIN_ID")
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# Тимчасове сховище мови (User ID -> 'ua', 'ru', 'en')
+# Тимчасові сховища (у реальному проєкті тут буде БД)
 user_languages = {}
+user_reg_date = {}
 
-# Тексти для перекладу
 MESSAGES = {
     'ua': {
         'welcome': 'Оберіть мову:',
-        'main_menu': 'Ви обрали українську мову 🇺🇦',
+        'main_menu': 'Головне меню 🏠',
         'profile': '👤 Профіль',
-        'profile_text': 'Твій профіль у Standoff 2 Market:\nID: {id}\nСтатус: Клієнт'
+        'profile_text': (
+            "ℹ️ **Інформація про вас:**\n\n"
+            "🆔 `{id}`\n"
+            "✨ **Баланс:** 0 грн ≈ 0 G\n\n"
+            "**Куплено всього:** 0 грн ~ 0 G\n"
+            "**Виведено всього:** 0 G\n"
+            "**Виводів:** 0\n\n"
+            "**Запрошено друзів:** 0\n\n"
+            "🗓️ **Реєстрація:** {reg_date}"
+        )
     },
     'ru': {
         'welcome': 'Выберите язык:',
-        'main_menu': 'Вы выбрали русский язык 🇷🇺',
+        'main_menu': 'Главное меню 🏠',
         'profile': '👤 Профиль',
-        'profile_text': 'Твой профиль в Standoff 2 Market:\nID: {id}\nСтатус: Клиент'
+        'profile_text': (
+            "ℹ️ **Информация о вас:**\n\n"
+            "🆔 `{id}`\n"
+            "✨ **Баланс:** 0 грн ≈ 0 G\n\n"
+            "**Куплено всего:** 0 грн ~ 0 G\n"
+            "**Выведено всего:** 0 G\n"
+            "**Выводов:** 0\n\n"
+            "**Приглашено друзей:** 0\n\n"
+            "🗓️ **Регистрация:** {reg_date}"
+        )
     },
     'en': {
         'welcome': 'Choose your language:',
-        'main_menu': 'You selected English 🇬🇧',
+        'main_menu': 'Main menu 🏠',
         'profile': '👤 Profile',
-        'profile_text': 'Your profile in Standoff 2 Market:\nID: {id}\nStatus: Client'
+        'profile_text': (
+            "ℹ️ **Information about you:**\n\n"
+            "🆔 `{id}`\n"
+            "✨ **Balance:** 0 UAH ≈ 0 G\n\n"
+            "**Total bought:** 0 UAH ~ 0 G\n"
+            "**Total withdrawn:** 0 G\n"
+            "**Withdrawals:** 0\n\n"
+            "**Friends invited:** 0\n\n"
+            "🗓️ **Registration:** {reg_date}"
+        )
     }
 }
 
@@ -56,6 +83,10 @@ def get_main_keyboard(lang):
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
+    # Фіксуємо дату реєстрації, якщо юзера ще немає в пам'яті
+    if message.from_user.id not in user_reg_date:
+        user_reg_date[message.from_user.id] = datetime.now().strftime("%d.%m.%Y")
+    
     await message.answer("Hello! / Привіт! / Привет!", reply_markup=get_lang_keyboard())
 
 @dp.callback_query(F.data.startswith("setlang_"))
@@ -63,7 +94,7 @@ async def set_language(callback: types.CallbackQuery):
     lang = callback.data.split("_")[1]
     user_languages[callback.from_user.id] = lang
     
-    await callback.message.delete() # Видаляємо повідомлення з вибором мови
+    await callback.message.delete()
     await callback.message.answer(
         MESSAGES[lang]['main_menu'], 
         reply_markup=get_main_keyboard(lang)
@@ -72,9 +103,17 @@ async def set_language(callback: types.CallbackQuery):
 
 @dp.message(F.text.in_([MESSAGES['ua']['profile'], MESSAGES['ru']['profile'], MESSAGES['en']['profile']]))
 async def show_profile(message: types.Message):
-    lang = user_languages.get(message.from_user.id, 'ua') # за замовчуванням ua
-    text = MESSAGES[lang]['profile_text'].format(id=message.from_user.id)
-    await message.answer(text)
+    user_id = message.from_user.id
+    lang = user_languages.get(user_id, 'ua')
+    reg_date = user_reg_date.get(user_id, "Невідомо")
+    
+    # Форматуємо текст профілю
+    text = MESSAGES[lang]['profile_text'].format(
+        id=user_id,
+        reg_date=reg_date
+    )
+    
+    await message.answer(text, parse_mode="Markdown")
 
 async def main():
     print("Бот Standoff 2 запущений...")
