@@ -41,6 +41,7 @@ MESSAGES = {
         'sell_confirm': "💰 За продажу ваших <b>{gold}</b> голди ви получите <b>{uah} грн</b> на протязі 15 хвилин!\n\nДля продажі пишіть: @YAKUZA_N3",
         'calc_main': "❗️0.32грн за 1G\n\n100g 32грн\n200g 64грн\n500g 160грн\n1000g 320грн\n\nБудь ласка, виберіть варіант нижче ⬇️",
         'calc_u_g': "Порахувати гривні в голду", 'calc_g_u': "Порахувати голду в гривні",
+        'enter_uah': "Введіть суму в гривнях ₴:", 'enter_gold': "Введіть кількість голди G:",
         'in_dev': "🛠 В розробці",
         'profile_text': "ℹ️ <b>Інформація про вас:</b>\n\n🆔 <code>{id}</code>\n✨ <b>Баланс:</b> {balance} грн\n\n<b>Куплено всього:</b> {bought} грн\n<b>Виведено всього:</b> {withdrawn} G\n<b>Виводів:</b> {w_count}\n\n<b>Запрошено друзів:</b> {friends}\n\n🗓️ <b>Реєстрація:</b> {reg_date}"
     },
@@ -49,12 +50,13 @@ MESSAGES = {
         'support': '🆘 Поддержка', 'withdraw': '📤 Вывести Голду', 'calc': '🧮 Подсчет',
         'welcome': '🇷🇺 Выберите язык:', 'main_menu': '🏠 Главное меню',
         'buy_title': "Price💰:\n100 голды - 32грн\n\n✍️ <b>Введите сумму в грн, на которую хотите пополнить</b>",
-        'buy_min_error': "❌ Минимум для покупки должен бути 32грн!",
+        'buy_min_error': "❌ Минимум для покупки должен быть 32грн!",
         'pay_confirm': "✅ <b>Супер</b>\n💴 <b>К оплате:</b> {uah}грн\n🫰🏻 <b>Получишь:</b> {gold}g\n\nВыберите способ оплаты:",
         'sell_title': "💲 <b>Введите количество голды:</b>\n«Минимум 100 голды»",
         'sell_confirm': "💰 За продажу <b>{gold}</b> голды вы получите <b>{uah} грн</b> в течении 15 минут!\n\nДля продажи пишите: @YAKUZA_N3",
         'calc_main': "❗️0.32грн за 1G\n\n100g 32грн\n200g 64грн\n500g 160грн\n1000g 320грн\n\nПожалуйста, выберите вариант ниже ⬇️",
         'calc_u_g': "Посчитать гривны в голду", 'calc_g_u': "Посчитать голду в гривны",
+        'enter_uah': "Введите сумму в гривнах ₴:", 'enter_gold': "Введите количество голды G:",
         'in_dev': "🛠 В разработке",
         'profile_text': "ℹ️ <b>Информация о вас:</b>\n\n🆔 <code>{id}</code>\n✨ <b>Баланс:</b> {balance} грн\n\n<b>Куплено всего:</b> {bought} грн\n<b>Выведено всего:</b> {withdrawn} G\n<b>Выводов:</b> {w_count}\n\n<b>Запрошено друзей:</b> {friends}\n\n🗓️ <b>Регистрация:</b> {reg_date}"
     },
@@ -69,6 +71,7 @@ MESSAGES = {
         'sell_confirm': "💰 For <b>{gold}</b> gold you will get <b>{uah} UAH</b> within 15 minutes!\n\nTo sell write: @YAKUZA_N3",
         'calc_main': "❗️0.32 UAH for 1G\n\n100g 32UAH\n200g 64UAH\n500g 160UAH\n1000g 320UAH\n\nPlease choose an option ⬇️",
         'calc_u_g': "Calculate UAH to Gold", 'calc_g_u': "Calculate Gold to UAH",
+        'enter_uah': "Enter amount in UAH ₴:", 'enter_gold': "Enter gold amount G:",
         'in_dev': "🛠 In development",
         'profile_text': "ℹ️ <b>Profile info:</b>\n\n🆔 <code>{id}</code>\n✨ <b>Balance:</b> {balance} UAH\n\n<b>Total bought:</b> {bought} UAH\n<b>Total withdrawn:</b> {withdrawn} G\n<b>Withdrawals:</b> {w_count}\n\n<b>Friends:</b> {friends}\n\n🗓️ <b>Registered:</b> {reg_date}"
     }
@@ -82,38 +85,44 @@ def get_main_kb(lang):
     b.row(types.KeyboardButton(text=MESSAGES[lang]['profile']), types.KeyboardButton(text=MESSAGES[lang]['support']))
     return b.as_markup(resize_keyboard=True)
 
-# --- ХЕНДЛЕРИ МЕНЮ (Мають бути першими!) ---
+# --- ХЕНДЛЕРИ МЕНЮ (ПЕРШОЧЕРГОВІ) ---
 
-@dp.message(F.text.contains("👤 Профіль") | F.text.contains("👤 Профиль") | F.text.contains("👤 Profile"))
-async def profile(message: types.Message, state: FSMContext):
+@dp.message(F.text.in_([MESSAGES[l][k] for l in MESSAGES for k in ['profile', 'support', 'withdraw', 'calc', 'buy', 'sell', 'main_menu']]))
+async def menu_router(message: types.Message, state: FSMContext):
     await state.clear()
     user = await users_col.find_one({"user_id": message.from_user.id})
     lang = user.get('lang', 'ua')
-    text = MESSAGES[lang]['profile_text'].format(
-        id=user['user_id'], balance=user.get('balance_uah', 0.0),
-        bought=user.get('total_bought', 0.0), withdrawn=user.get('total_withdrawn', 0.0),
-        w_count=user.get('withdrawals_count', 0), friends=user.get('friends_count', 0), reg_date=user.get('reg_date', '--')
-    )
-    await message.answer(text, parse_mode="HTML")
+    txt = message.text
 
-@dp.message(F.text.contains("🆘 Підтримка") | F.text.contains("🆘 Поддержка") | F.text.contains("🆘 Support"))
-async def support(message: types.Message, state: FSMContext):
-    await state.clear()
-    await message.answer(f"🆘 Зв'язок з адміністратором: {SUPPORT_LINK}")
+    if txt == MESSAGES[lang]['profile']:
+        text = MESSAGES[lang]['profile_text'].format(
+            id=user['user_id'], balance=user.get('balance_uah', 0.0),
+            bought=user.get('total_bought', 0.0), withdrawn=user.get('total_withdrawn', 0.0),
+            w_count=user.get('withdrawals_count', 0), friends=user.get('friends_count', 0), reg_date=user.get('reg_date', '--')
+        )
+        await message.answer(text, parse_mode="HTML")
+    
+    elif txt == MESSAGES[lang]['support']:
+        await message.answer(f"🆘 Зв'язок з адміністратором: {SUPPORT_LINK}")
+    
+    elif txt == MESSAGES[lang]['withdraw']:
+        await message.answer(MESSAGES[lang]['in_dev'])
+    
+    elif txt == MESSAGES[lang]['calc']:
+        b = InlineKeyboardBuilder()
+        b.button(text=MESSAGES[lang]['calc_u_g'], callback_data="calc_u_g")
+        b.button(text=MESSAGES[lang]['calc_g_u'], callback_data="calc_g_u")
+        await message.answer(MESSAGES[lang]['calc_main'], reply_markup=b.adjust(1).as_markup(), parse_mode="HTML")
 
-@dp.message(F.text.contains("📤 Вивести") | F.text.contains("📤 Вывести") | F.text.contains("📤 Withdraw"))
-async def withdraw(message: types.Message, state: FSMContext):
-    await state.clear()
-    user = await users_col.find_one({"user_id": message.from_user.id})
-    await message.answer(MESSAGES[user['lang']]['in_dev'])
+    elif txt == MESSAGES[lang]['buy']:
+        await message.answer(MESSAGES[lang]['buy_title'], parse_mode="HTML")
+        await state.set_state(ShopStates.waiting_for_buy_amount)
 
-# --- КУПІВЛЯ ТА ПРОДАЖ (ОСНОВНА ЛОГІКА) ---
+    elif txt == MESSAGES[lang]['sell']:
+        await message.answer(MESSAGES[lang]['sell_title'], parse_mode="HTML")
+        await state.set_state(ShopStates.waiting_for_sell_gold)
 
-@dp.message(F.text.contains("💰 Купити") | F.text.contains("💰 Купить") | F.text.contains("💰 Buy"))
-async def buy_start(message: types.Message, state: FSMContext):
-    user = await users_col.find_one({"user_id": message.from_user.id})
-    await message.answer(MESSAGES[user['lang']]['buy_title'], parse_mode="HTML")
-    await state.set_state(ShopStates.waiting_for_buy_amount)
+# --- ОБРОБКА ВВЕДЕННЯ ЧИСЕЛ (FSM) ---
 
 @dp.message(ShopStates.waiting_for_buy_amount)
 async def buy_process(message: types.Message, state: FSMContext):
@@ -133,12 +142,6 @@ async def buy_process(message: types.Message, state: FSMContext):
     await message.answer(MESSAGES[lang]['pay_confirm'].format(uah=uah, gold=gold), reply_markup=b.adjust(1).as_markup(), parse_mode="HTML")
     await state.clear()
 
-@dp.message(F.text.contains("📥 Продати") | F.text.contains("📥 Продать") | F.text.contains("📥 Sell"))
-async def sell_start(message: types.Message, state: FSMContext):
-    user = await users_col.find_one({"user_id": message.from_user.id})
-    await message.answer(MESSAGES[user['lang']]['sell_title'], parse_mode="HTML")
-    await state.set_state(ShopStates.waiting_for_sell_gold)
-
 @dp.message(ShopStates.waiting_for_sell_gold)
 async def sell_process(message: types.Message, state: FSMContext):
     user = await users_col.find_one({"user_id": message.from_user.id})
@@ -148,50 +151,44 @@ async def sell_process(message: types.Message, state: FSMContext):
     
     gold = int(message.text)
     if gold < 100:
-        return await message.answer(MESSAGES[lang]['sell_title'])
+        return await message.answer(MESSAGES[lang]['sell_title'], parse_mode="HTML")
     
     uah = round(gold * 0.22, 2)
     await message.answer(MESSAGES[lang]['sell_confirm'].format(gold=gold, uah=uah), parse_mode="HTML")
     await state.clear()
 
-# --- ПІДРАХУНОК (КАЛЬКУЛЯТОР) ---
-@dp.message(F.text.contains("🧮 Підрахунок") | F.text.contains("🧮 Подсчет") | F.text.contains("🧮 Calculator"))
-async def calc_start(message: types.Message, state: FSMContext):
-    await state.clear()
-    user = await users_col.find_one({"user_id": message.from_user.id})
-    lang = user['lang']
-    b = InlineKeyboardBuilder()
-    b.button(text=MESSAGES[lang]['calc_u_g'], callback_data="calc_u_g")
-    b.button(text=MESSAGES[lang]['calc_g_u'], callback_data="calc_g_u")
-    await message.answer(MESSAGES[lang]['calc_main'], reply_markup=b.adjust(1).as_markup(), parse_mode="HTML")
+# --- КАЛЬКУЛЯТОР (CALLBACKS) ---
 
 @dp.callback_query(F.data == "calc_u_g")
 async def calc_ug(callback: types.CallbackQuery, state: FSMContext):
     user = await users_col.find_one({"user_id": callback.from_user.id})
     await callback.message.answer(MESSAGES[user['lang']]['enter_uah'])
     await state.set_state(ShopStates.calc_uah_to_gold)
+    await callback.answer()
 
 @dp.callback_query(F.data == "calc_g_u")
 async def calc_gu(callback: types.CallbackQuery, state: FSMContext):
     user = await users_col.find_one({"user_id": callback.from_user.id})
     await callback.message.answer(MESSAGES[user['lang']]['enter_gold'])
     await state.set_state(ShopStates.calc_gold_to_uah)
+    await callback.answer()
 
 @dp.message(ShopStates.calc_uah_to_gold)
 async def res_ug(message: types.Message, state: FSMContext):
-    if not message.text.isdigit(): return
+    if not message.text.isdigit(): return await message.answer("⚠️ Число!")
     res = round(int(message.text) / 0.32, 2)
-    await message.answer(f"✅ {message.text}.00грн ≈ {res}G")
+    await message.answer(f"✅ <b>{message.text}.00грн</b> ≈ <b>{res}G</b>", parse_mode="HTML")
     await state.clear()
 
 @dp.message(ShopStates.calc_gold_to_uah)
 async def res_gu(message: types.Message, state: FSMContext):
-    if not message.text.isdigit(): return
+    if not message.text.isdigit(): return await message.answer("⚠️ Число!")
     res = round(int(message.text) * 0.32, 2)
-    await message.answer(f"✅ {message.text}G ≈ {res}грн")
+    await message.answer(f"✅ <b>{message.text}G</b> ≈ <b>{res}грн</b>", parse_mode="HTML")
     await state.clear()
 
-# --- СТАРТ ТА МОВИ ---
+# --- СИСТЕМНІ ---
+
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
     await state.clear()
