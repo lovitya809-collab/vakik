@@ -28,7 +28,7 @@ class ShopStates(StatesGroup):
     waiting_for_buy_amount = State()
     waiting_for_sell_gold = State()
 
-# --- ТЕКСТИ ---
+# --- ТЕКСТИ (HTML ФОРМАТ) ---
 MESSAGES = {
     'ua': {
         'welcome': '🇺🇦 Оберіть мову / Choose language:',
@@ -38,14 +38,14 @@ MESSAGES = {
         'sell': '📥 Продати Голду',
         'withdraw': '📤 Вивести Голду',
         'support': '🆘 Підтримка',
-        'buy_title': "Price💰:\n100 голди - 32грн\n\n✍️ Введіть сумму в грн, на яку хочете поповнити",
-        'pay_confirm': "✅ Супер\n💴 До оплати: {uah}грн\n🫰🏻 Получиш: {gold}g\n\nВиберіть спосіб оплати:",
-        'sell_title': "💲 Введіть кількість голди, яку ви хочете продати:\n«Мінімум 100 голди»",
-        'sell_confirm': "💰 За продажу ваших {gold} голди ви получите {uah} грн на протязі 15 хвилин!\n\nДля продажі пишіть: @YAKUZA_N3",
-        'profile_text': "ℹ️ **Інформація про вас:**\n\n🆔 `{id}`\n✨ **Баланс:** {balance} грн\n\n**Куплено всього:** {bought} грн\n**Виведено всього:** {withdrawn} G\n**Виводів:** {w_count}\n\n**Запрошено друзів:** {friends}\n\n🗓️ **Реєстрація:** {reg_date}"
+        'buy_title': "Price💰:\n100 голди - 32грн\n\n✍️ <b>Введіть сумму в грн, на яку хочете поповнити</b>",
+        'pay_confirm': "✅ <b>Супер</b>\n💴 <b>До оплати:</b> {uah}грн\n🫰🏻 <b>Получиш:</b> {gold}g\n\nВиберіть спосіб оплати:",
+        'sell_title': "💲 <b>Введіть кількість голди, яку ви хочете продати:</b>\n«Мінімум 100 голди»",
+        'sell_confirm': "💰 За продажу ваших <b>{gold}</b> голди ви получите <b>{uah} грн</b> на протязі 15 хвилин!\n\nДля продажі пишіть: @YAKUZA_N3",
+        'profile_text': "ℹ️ <b>Інформація про вас:</b>\n\n🆔 <code>{id}</code>\n✨ <b>Баланс:</b> {balance} грн\n\n<b>Куплено всього:</b> {bought} грн\n<b>Виведено всього:</b> {withdrawn} G\n<b>Виводів:</b> {w_count}\n\n<b>Запрошено друзів:</b> {friends}\n\n🗓️ <b>Реєстрація:</b> {reg_date}"
     }
 }
-# Дублюємо для RU/EN, щоб бот не падав, якщо мова не UA
+# Дублюємо для RU/EN
 MESSAGES['ru'] = MESSAGES['ua']
 MESSAGES['en'] = MESSAGES['ua']
 
@@ -74,7 +74,7 @@ def get_pay_methods_kb():
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
-    await state.clear() # Скидаємо стани при старті
+    await state.clear()
     user = await users_col.find_one({"user_id": message.from_user.id})
     if not user:
         await users_col.insert_one({
@@ -91,12 +91,12 @@ async def set_lang(callback: types.CallbackQuery):
     await callback.message.delete()
     await callback.message.answer(MESSAGES[lang]['main_menu'], reply_markup=get_main_kb(lang))
 
-# --- КУПІВЛЯ (BUY) ---
+# --- КУПІВЛЯ ---
 @dp.message(F.text.contains("Купити") | F.text.contains("Buy") | F.text.contains("Купить"))
 async def buy_start(message: types.Message, state: FSMContext):
     user = await users_col.find_one({"user_id": message.from_user.id})
     lang = user.get('lang', 'ua') if user else 'ua'
-    await message.answer(MESSAGES[lang]['buy_title'])
+    await message.answer(MESSAGES[lang]['buy_title'], parse_mode="HTML")
     await state.set_state(ShopStates.waiting_for_buy_amount)
 
 @dp.message(ShopStates.waiting_for_buy_amount)
@@ -108,15 +108,15 @@ async def buy_process(message: types.Message, state: FSMContext):
     gold = round((uah / 32) * 100, 2)
     user = await users_col.find_one({"user_id": message.from_user.id})
     lang = user.get('lang', 'ua') if user else 'ua'
-    await message.answer(MESSAGES[lang]['pay_confirm'].format(uah=uah, gold=gold), reply_markup=get_pay_methods_kb())
+    await message.answer(MESSAGES[lang]['pay_confirm'].format(uah=uah, gold=gold), reply_markup=get_pay_methods_kb(), parse_mode="HTML")
     await state.clear()
 
-# --- ПРОДАЖ (SELL) ---
+# --- ПРОДАЖ ---
 @dp.message(F.text.contains("Продати") | F.text.contains("Sell") | F.text.contains("Продать"))
 async def sell_start(message: types.Message, state: FSMContext):
     user = await users_col.find_one({"user_id": message.from_user.id})
     lang = user.get('lang', 'ua') if user else 'ua'
-    await message.answer(MESSAGES[lang]['sell_title'], parse_mode="Markdown")
+    await message.answer(MESSAGES[lang]['sell_title'], parse_mode="HTML")
     await state.set_state(ShopStates.waiting_for_sell_gold)
 
 @dp.message(ShopStates.waiting_for_sell_gold)
@@ -126,17 +126,17 @@ async def sell_process(message: types.Message, state: FSMContext):
         return
     gold = int(message.text)
     if gold < 100:
-        await message.answer("❌ Мінімум 100 голди! Спробуйте ще раз або натисніть /start")
+        await message.answer("❌ Мінімум 100 голди! Спробуйте ще раз або напишіть /start")
         return
     
     uah = round(gold * 0.22, 2)
     user = await users_col.find_one({"user_id": message.from_user.id})
     lang = user.get('lang', 'ua') if user else 'ua'
     
-    await message.answer(MESSAGES[lang]['sell_confirm'].format(gold=gold, uah=uah), parse_mode="Markdown")
+    await message.answer(MESSAGES[lang]['sell_confirm'].format(gold=gold, uah=uah), parse_mode="HTML")
     await state.clear()
 
-# --- ПРОФІЛЬ ТА ПІДТРИМКА ---
+# --- ПРОФІЛЬ ---
 @dp.message(F.text.contains("Профіль") | F.text.contains("Profile") | F.text.contains("Профиль"))
 async def profile(message: types.Message):
     user = await users_col.find_one({"user_id": message.from_user.id})
@@ -147,26 +147,26 @@ async def profile(message: types.Message):
         bought=user['total_bought'], withdrawn=user['total_withdrawn'],
         w_count=user['withdrawals_count'], friends=user['friends_count'], reg_date=user['reg_date']
     )
-    await message.answer(text, parse_mode="Markdown")
+    await message.answer(text, parse_mode="HTML")
 
 @dp.message(F.text.contains("Підтримка") | F.text.contains("Support") | F.text.contains("Поддержка"))
 async def support(message: types.Message):
     await message.answer(f"🆘 Зв'язок з адміністратором: {SUPPORT_LINK}")
 
-# Адмін-команда: /pay ID СУМА
+# Адмін-команда
 @dp.message(Command("pay"))
 async def admin_pay(message: types.Message):
     if str(message.from_user.id) != ADMIN_ID: return
     try:
         _, uid, amount = message.text.split()
         await users_col.update_one({"user_id": int(uid)}, {"$inc": {"balance_uah": float(amount)}})
-        await message.answer(f"✅ Користувачу {uid} нараховано {amount} грн")
-    except: await message.answer("Формат: `/pay 12345 100`", parse_mode="Markdown")
+        await message.answer(f"✅ Користувачу <code>{uid}</code> нараховано {amount} грн", parse_mode="HTML")
+    except: await message.answer("Формат: <code>/pay ID СУМА</code>", parse_mode="HTML")
 
 async def main():
     try:
         await cluster.admin.command('ping')
-        print("MongoDB успішно підключено!")
+        print("MongoDB підключено!")
     except Exception as e:
         print(f"Помилка БД: {e}"); return
     await dp.start_polling(bot)
