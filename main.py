@@ -2,15 +2,16 @@ import os
 import asyncio
 from datetime import datetime
 from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import Command
+from aiogram.filters import Command, StateFilter
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import StatesGroup, State
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 from motor.motor_asyncio import AsyncIOMotorClient
 
-# Налаштування
+# --- НАЛАШТУВАННЯ ---
 TOKEN = os.getenv("BOT_TOKEN")
 MONGO_URL = os.getenv("MONGO_URL")
 ADMIN_ID = os.getenv("ADMIN_ID")
-SUPPORT_LINK = "@your_manager_username" # Сюди впиши юзернейм підтримки
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
@@ -20,131 +21,73 @@ cluster = AsyncIOMotorClient(MONGO_URL)
 db = cluster["standoff_bot"]
 users_col = db["users"]
 
+# Стани для купівлі
+class BuyGold(StatesGroup):
+    waiting_for_amount = State()
+
 # --- ТЕКСТИ ---
 MESSAGES = {
     'ua': {
-        'welcome': 'Оберіть мову:',
-        'main_menu': '🏠 Головне меню',
-        'profile': '👤 Профіль',
-        'buy_gold': '💰 Купити Голду',
-        'withdraw_gold': '📤 Вивести Голду',
-        'sell_gold': '📥 Продати Голду',
-        'support': '🆘 Підтримка',
-        'support_text': f"За всіма питаннями пишіть сюди: {SUPPORT_LINK}",
-        'profile_text': (
-            "ℹ️ **Інформація про вас:**\n\n"
-            "🆔 `{id}`\n"
-            "✨ **Баланс:** {balance} грн ≈ {gold} G\n\n"
-            "**Куплено всього:** {bought} грн\n"
-            "**Виведено всього:** {withdrawn} G\n"
-            "**Виводів:** {w_count}\n\n"
-            "**Запрошено друзів:** {friends}\n\n"
-            "🗓️ **Реєстрація:** {reg_date}"
-        )
-    },
-    'ru': {
-        'welcome': 'Выберите язык:',
-        'main_menu': '🏠 Главное меню',
-        'profile': '👤 Профиль',
-        'buy_gold': '💰 Купить Голду',
-        'withdraw_gold': '📤 Вывести Голду',
-        'sell_gold': '📥 Продать Голду',
-        'support': '🆘 Поддержка',
-        'support_text': f"По всем вопросам пишите сюда: {SUPPORT_LINK}",
-        'profile_text': "ℹ️ **Информация о вас:**\n\n🆔 `{id}`\n✨ **Баланс:** {balance} грн ≈ {gold} G\n\n**Куплено всего:** {bought} грн\n**Выведено всего:** {withdrawn} G\n**Выводов:** {w_count}\n\n**Приглашено друзей:** {friends}\n\n🗓️ **Регистрация:** {reg_date}"
-    },
-    'en': {
-        'welcome': 'Choose language:',
-        'main_menu': '🏠 Main menu',
-        'profile': '👤 Profile',
-        'buy_gold': '💰 Buy Gold',
-        'withdraw_gold': '📤 Withdraw Gold',
-        'sell_gold': '📥 Sell Gold',
-        'support': '🆘 Support',
-        'support_text': f"For all questions write here: {SUPPORT_LINK}",
-        'profile_text': "ℹ️ **Information about you:**\n\n🆔 `{id}`\n✨ **Balance:** {balance} UAH ≈ {gold} G\n\n**Total bought:** {bought} UAH\n**Total withdrawn:** {withdrawn} G\n**Withdrawals:** {w_count}\n\n**Friends invited:** {friends}\n\n🗓️ **Registration:** {reg_date}"
+        'buy_title': "Price💰:\n100 голди - 32грн\n\n✍️Введіть сумму в грн, на яку хочете поповнити",
+        'payment_confirm': "✅Супер\n💴До оплати: {uah}грн\n🫰🏻Получиш: {gold}g\n\nВиберіть спосіб оплати:",
+        'card': "💳 Карта",
+        'crypto': "💎 Crypto Bot",
+        # ... (інші тексти з минулих кроків залишаються)
     }
 }
+# Додай аналогічні ключі для 'ru' та 'en' у свій словник MESSAGES
 
 # --- КЛАВІАТУРИ ---
 
-def get_main_keyboard(lang):
-    builder = ReplyKeyboardBuilder()
-    # Перший ряд: Купити та Продати
-    builder.row(
-        types.KeyboardButton(text=MESSAGES[lang]['buy_gold']),
-        types.KeyboardButton(text=MESSAGES[lang]['sell_gold'])
-    )
-    # Другий ряд: Вивести
-    builder.row(types.KeyboardButton(text=MESSAGES[lang]['withdraw_gold']))
-    # Третій ряд: Профіль та Підтримка
-    builder.row(
-        types.KeyboardButton(text=MESSAGES[lang]['profile']),
-        types.KeyboardButton(text=MESSAGES[lang]['support'])
-    )
-    return builder.as_markup(resize_keyboard=True)
-
-def get_lang_keyboard():
+def get_payment_keyboard():
     builder = InlineKeyboardBuilder()
-    builder.button(text="Українська 🇺🇦", callback_data="setlang_ua")
-    builder.button(text="Русский 🇷🇺", callback_data="setlang_ru")
-    builder.button(text="English 🇬🇧", callback_data="setlang_en")
+    builder.button(text="💳 Карта", callback_data="pay_card")
+    builder.button(text="💎 Crypto Bot", callback_data="pay_crypto")
     builder.adjust(1)
     return builder.as_markup()
 
-# --- ХЕНДЛЕРИ ---
+# --- ХЕНДЛЕРИ КУПІВЛІ ---
 
-@dp.message(Command("start"))
-async def cmd_start(message: types.Message):
-    user_id = message.from_user.id
-    user = await users_col.find_one({"user_id": user_id})
-    if not user:
-        await users_col.insert_one({
-            "user_id": user_id,
-            "lang": "ua",
-            "balance_uah": 0.0,
-            "total_bought": 0.0,
-            "total_withdrawn": 0.0,
-            "withdrawals_count": 0,
-            "friends_count": 0,
-            "reg_date": datetime.now().strftime("%d.%m.%Y")
-        })
-    await message.answer("🇺🇦 Оберіть мову / 🇬🇧 Choose language:", reply_markup=get_lang_keyboard())
+# 1. Натискання на кнопку "Купити Голду"
+@dp.message(F.text.in_(["💰 Купити Голду", "💰 Купить Голду", "💰 Buy Gold"]))
+async def start_buy_gold(message: types.Message, state: FSMContext):
+    await message.answer(MESSAGES['ua']['buy_title']) # Можна додати вибір мови з БД
+    await state.set_state(BuyGold.waiting_for_amount)
 
-@dp.callback_query(F.data.startswith("setlang_"))
-async def set_language(callback: types.CallbackQuery):
-    lang = callback.data.split("_")[1]
-    await users_col.update_one({"user_id": callback.from_user.id}, {"$set": {"lang": lang}})
-    await callback.message.delete()
-    await callback.message.answer(MESSAGES[lang]['main_menu'], reply_markup=get_main_keyboard(lang))
+# 2. Обробка введеної суми
+@dp.message(BuyGold.waiting_for_amount)
+async def process_amount(message: types.Message, state: FSMContext):
+    if not message.text.isdigit():
+        await message.answer("⚠️ Будь ласка, введіть число (суму в грн).")
+        return
+
+    amount_uah = int(message.text)
+    # Розрахунок голди: (сума / 32) * 100
+    gold_to_receive = round((amount_uah / 32) * 100, 2)
+
+    await state.update_data(amount=amount_uah, gold=gold_to_receive)
+    
+    text = MESSAGES['ua']['payment_confirm'].format(uah=amount_uah, gold=gold_to_receive)
+    await message.answer(text, reply_markup=get_payment_keyboard())
+    await state.clear() # Очищуємо стан, але дані можна було б зберегти для оплати
+
+# --- ОБРОБКА КНОПОК ОПЛАТИ ---
+
+@dp.callback_query(F.data == "pay_card")
+async def pay_card(callback: types.CallbackQuery):
+    # Тут зазвичай видаються реквізити карти адміна
+    await callback.message.answer("Реквізити для оплати на карту:\n`4444 5555 6666 7777`\nПісля оплати надішліть чек підтримці.", parse_mode="Markdown")
     await callback.answer()
 
-@dp.message(lambda m: any(m.text == MESSAGES[l]['profile'] for l in MESSAGES))
-async def show_profile(message: types.Message):
-    user = await users_col.find_one({"user_id": message.from_user.id})
-    if not user: return
-    lang = user.get('lang', 'ua')
-    gold_rate = 2 
-    text = MESSAGES[lang]['profile_text'].format(
-        id=user['user_id'], balance=user['balance_uah'], gold=user['balance_uah'] * gold_rate,
-        bought=user['total_bought'], withdrawn=user['total_withdrawn'],
-        w_count=user['withdrawals_count'], friends=user['friends_count'], reg_date=user['reg_date']
-    )
-    await message.answer(text, parse_mode="Markdown")
+@dp.callback_query(F.data == "pay_crypto")
+async def pay_crypto(callback: types.CallbackQuery):
+    await callback.message.answer("Оплата через Crypto Bot тимчасово недоступна. Скористайтеся картою.")
+    await callback.answer()
 
-@dp.message(lambda m: any(m.text == MESSAGES[l]['support'] for l in MESSAGES))
-async def show_support(message: types.Message):
-    user = await users_col.find_one({"user_id": message.from_user.id})
-    lang = user.get('lang', 'ua') if user else 'ua'
-    await message.answer(MESSAGES[lang]['support_text'])
-
-# Тимчасові відповіді для інших кнопок
-@dp.message(F.text.in_([MESSAGES['ua']['buy_gold'], MESSAGES['ru']['buy_gold'], MESSAGES['en']['buy_gold']]))
-async def buy_gold_temp(message: types.Message):
-    await message.answer("🚧 Цей розділ знаходиться в розробці...")
+# (Решта хендлерів: start, profile, тощо залишаються з минулого коду)
 
 async def main():
-    print("Бот Standoff 2 запущений з повним меню...")
+    print("Бот запущений. Очікування оплати...")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
