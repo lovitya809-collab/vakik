@@ -10,7 +10,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 from motor.motor_asyncio import AsyncIOMotorClient
 
-# Логування для відстеження помилок
+# Логування
 logging.basicConfig(level=logging.INFO)
 
 # --- НАЛАШТУВАННЯ ---
@@ -18,7 +18,7 @@ TOKEN = os.getenv("BOT_TOKEN")
 MONGO_URL = os.getenv("MONGO_URL")
 SUPPORT_LINK = "@YAKUZA_N3" 
 
-# Отримуємо список адмінів зі змінної оточення
+# Список адмінів (ID через кому в Railway)
 ADMIN_IDS = [int(id.strip()) for id in os.getenv("ADMIN_IDS", "").split(",") if id.strip()]
 
 CARDS = {
@@ -55,7 +55,7 @@ def get_main_kb():
     b.row(types.KeyboardButton(text=B_PROFILE), types.KeyboardButton(text=B_SUPPORT))
     return b.as_markup(resize_keyboard=True)
 
-# --- ГОЛОВНИЙ ОБРОБНИК МЕНЮ ---
+# --- ГОЛОВНЕ МЕНЮ ---
 @dp.message(F.text.in_([B_BUY, B_SELL, B_PROFILE, B_SUPPORT, B_WITHDRAW, B_CALC]))
 async def main_menu(message: types.Message, state: FSMContext):
     await state.clear()
@@ -65,7 +65,6 @@ async def main_menu(message: types.Message, state: FSMContext):
         await users_col.insert_one(user)
 
     txt = message.text
-
     if txt == B_PROFILE:
         text = (
             f"ℹ️ <b>Інформація про вас:</b>\n\n"
@@ -73,63 +72,60 @@ async def main_menu(message: types.Message, state: FSMContext):
             f"✨ <b>Баланс:</b> {user.get('balance_uah', 0.0)} грн\n\n"
             f"<b>Куплено всього:</b> {user.get('total_bought', 0.0)} грн\n"
             f"<b>Виведено всього:</b> {user.get('total_withdrawn', 0.0)} G\n"
-            f"<b>Виводів:</b> {user.get('withdrawals_count', 0)}\n\n"
-            f"<b>Запрошено друзів:</b> {user.get('friends_count', 0)}\n\n"
             f"🗓️ <b>Реєстрація:</b> {user.get('reg_date', '--')}"
         )
         await message.answer(text, parse_mode="HTML")
-
     elif txt == B_SUPPORT:
         await message.answer(f"🆘 Зв'язок з адміністратором: {SUPPORT_LINK}")
-
+    elif txt == B_BUY:
+        await message.answer("Price💰:\n100 голди - 32грн\n\n✍️ <b>Введіть сумму в грн:</b>", parse_mode="HTML")
+        await state.set_state(ShopStates.waiting_for_buy_amount)
+    elif txt == B_WITHDRAW:
+        await message.answer("Введіть кількість голди для виведення (мін. 100G):")
+        await state.set_state(ShopStates.waiting_for_withdraw_amount)
     elif txt == B_CALC:
         b = InlineKeyboardBuilder()
-        b.button(text="₴ Гривні ➡️ Gold G", callback_data="calc_u_g")
-        b.button(text="Gold G ➡️ ₴ Гривні", callback_data="calc_g_u")
-        await message.answer("❗️<b>Курс: 0.32грн за 1G</b>", reply_markup=b.adjust(1).as_markup(), parse_mode="HTML")
-
-    elif txt == B_BUY:
-        await message.answer("Price💰:\n100 голди - 32грн\n\n✍️ <b>Введіть сумму в грн</b>", parse_mode="HTML")
-        await state.set_state(ShopStates.waiting_for_buy_amount)
-
-    elif txt == B_WITHDRAW:
-        await message.answer("Ви бажаєте вивести голду.\nМінімальна кількість 100G.\nВведіть кількість:")
-        await state.set_state(ShopStates.waiting_for_withdraw_amount)
-
+        b.button(text="₴ Грн ➡️ Gold G", callback_data="calc_u_g")
+        b.button(text="Gold G ➡️ ₴ Грн", callback_data="calc_g_u")
+        await message.answer("🧮 Калькулятор курсу 0.32", reply_markup=b.adjust(1).as_markup())
     elif txt == B_SELL:
         await message.answer(f"Для продажу голди пишіть: {SUPPORT_LINK}")
 
-# --- КУПІВЛЯ ТА КВИТАНЦІЇ ---
+# --- КУПІВЛЯ ---
 @dp.message(ShopStates.waiting_for_buy_amount)
 async def buy_input(message: types.Message, state: FSMContext):
     if not message.text.isdigit(): return
     uah = int(message.text)
     if uah < 32: return await message.answer("❌ Мінімум 32 грн!")
-    await state.update_data(buy_uah=uah)
+    gold = round(uah / 0.32, 2)
+    await state.update_data(buy_uah=uah, buy_gold=gold)
+    
     b = InlineKeyboardBuilder()
     b.button(text="💳 Монобанк", callback_data="pay_mono")
     b.button(text="💳 Абанк", callback_data="pay_abank")
-    await message.answer("Оберіть банк:", reply_markup=b.adjust(1).as_markup())
+    await message.answer(f"Сума: {uah} грн ({gold}G)\nОберіть банк:", reply_markup=b.adjust(1).as_markup())
 
 @dp.callback_query(F.data.startswith("pay_"))
 async def pay_choice(callback: types.CallbackQuery, state: FSMContext):
     bank = callback.data.split("_")[1]
     data = await state.get_data()
-    uah = data['buy_uah']
     card = CARDS['monobank'] if bank == "mono" else CARDS['abank']
     bank_name = "Monobank" if bank == "mono" else "Абанк"
     
-    await state.update_data(bank=bank_name, gold=round(uah/0.32, 2))
+    await state.update_data(bank_name=bank_name)
     await callback.message.edit_text(
-        f"<b>Заявка на покупку Голди💰</b>\n\nДо сплати: <b>{uah} грн</b>\nБанк: <b>{bank_name}</b>\n"
-        f"<code>{card}</code>\n\n<b>*обовʼязково кидайте фото квитанції*</b>", parse_mode="HTML"
+        f"<b>Заявка на покупку Голди💰</b>\n\n"
+        f"До сплати: <b>{data['buy_uah']} грн</b>\n"
+        f"Отримаєте: <b>{data['buy_gold']} G</b>\n"
+        f"Банк: <b>{bank_name}</b>\n<code>{card}</code>\n\n"
+        f"<b>*Обовʼязково надішліть фото квитанції!*</b>", parse_mode="HTML"
     )
     await state.set_state(ShopStates.waiting_for_receipt)
 
 @dp.message(ShopStates.waiting_for_receipt, F.photo)
 async def receipt_handler(message: types.Message, state: FSMContext):
     data = await state.get_data()
-    await message.answer("✅ Квитанція відправлена на перевірку!")
+    await message.answer("✅ Квитанція прийнята, очікуйте підтвердження.")
     
     b = InlineKeyboardBuilder()
     b.button(text="✅ Підтвердити", callback_data=f"adm_ok_{message.from_user.id}_{data['buy_uah']}")
@@ -137,58 +133,72 @@ async def receipt_handler(message: types.Message, state: FSMContext):
     
     for admin_id in ADMIN_IDS:
         try:
-            await bot.send_photo(admin_id, message.photo[-1].file_id, 
-                                 caption=f"💰 Оплата: {data['buy_uah']} грн\nЮзер: {message.from_user.id}", 
-                                 reply_markup=b.as_markup())
+            await bot.send_photo(
+                admin_id, 
+                message.photo[-1].file_id, 
+                caption=f"🔔 <b>Нова заявка!</b>\nЮзер: <code>{message.from_user.id}</code>\nСума: <b>{data['buy_uah']} грн</b>\nГолда: <b>{data['buy_gold']} G</b>\nБанк: {data.get('bank_name')}",
+                reply_markup=b.as_markup(),
+                parse_mode="HTML"
+            )
         except: pass
     await state.clear()
 
-# --- ВИВЕДЕННЯ ---
+# --- АДМІН-ДІЇ (ВИПРАВЛЕНО) ---
+@dp.callback_query(F.data.startswith("adm_"))
+async def admin_decision(c: types.CallbackQuery):
+    if c.from_user.id not in ADMIN_IDS:
+        return await c.answer("Ви не адмін!", show_alert=True)
+    
+    data = c.data.split("_")
+    action = data[1]
+    user_id = int(data[2])
+    
+    if action == "ok":
+        amount_uah = float(data[3])
+        # Оновлення в БД
+        await users_col.update_one(
+            {"user_id": user_id}, 
+            {"$inc": {"balance_uah": amount_uah, "total_bought": amount_uah}}
+        )
+        try:
+            await bot.send_message(user_id, f"✅ Ваша оплата на {amount_uah} грн підтверджена! Баланс поповнено.")
+        except: pass
+        await c.message.edit_caption(caption=c.message.caption + "\n\n✅ <b>ПІДТВЕРДЖЕНО</b>", parse_mode="HTML")
+    else:
+        try:
+            await bot.send_message(user_id, "❌ Ваша квитанція була відхилена адміністратором.")
+        except: pass
+        await c.message.edit_caption(caption=c.message.caption + "\n\n❌ <b>ВІДХИЛЕНО</b>", parse_mode="HTML")
+    
+    await c.answer()
+
+# --- ВИВЕДЕННЯ ТА КАЛЬКУЛЯТОР ---
 @dp.message(ShopStates.waiting_for_withdraw_amount)
-async def withdraw_input(message: types.Message, state: FSMContext):
+async def withdraw_process(message: types.Message, state: FSMContext):
     if not message.text.isdigit(): return
     gold = int(message.text)
     if gold < 100: return await message.answer("Мінімум 100G!")
-    await message.answer(f"Кількість: {gold}G\nНапишіть {SUPPORT_LINK} для виводу.")
-    
+    await message.answer(f"Заявка на вивід {gold}G прийнята. Напишіть {SUPPORT_LINK}")
     for admin_id in ADMIN_IDS:
-        try: await bot.send_message(admin_id, f"📤 Запит на вивід: {gold}G від {message.from_user.id}")
+        try: await bot.send_message(admin_id, f"📤 Запит на вивід: {gold}G від <code>{message.from_user.id}</code>", parse_mode="HTML")
         except: pass
     await state.clear()
 
-# --- КАЛЬКУЛЯТОР ---
 @dp.callback_query(F.data.startswith("calc_"))
 async def calc_process(c: types.CallbackQuery, state: FSMContext):
-    await c.message.answer("Введіть кількість:")
+    await c.message.answer("Введіть число:")
     await state.set_state(ShopStates.calc_uah_to_gold if c.data == "calc_u_g" else ShopStates.calc_gold_to_uah)
     await c.answer()
 
 @dp.message(ShopStates.calc_uah_to_gold)
 async def c1(m: types.Message, state: FSMContext):
-    if m.text.isdigit(): await m.answer(f"✅ {m.text}грн ≈ {round(int(m.text)/0.32, 2)}G")
+    if m.text.isdigit(): await m.answer(f"✅ {m.text} грн ≈ {round(int(m.text)/0.32, 2)} G")
     await state.clear()
 
 @dp.message(ShopStates.calc_gold_to_uah)
 async def c2(m: types.Message, state: FSMContext):
-    if m.text.isdigit(): await m.answer(f"✅ {m.text}G ≈ {round(int(m.text)*0.32, 2)}грн")
+    if m.text.isdigit(): await m.answer(f"✅ {m.text} G ≈ {round(int(m.text)*0.32, 2)} грн")
     await state.clear()
-
-# --- АДМІН-ДІЇ ---
-@dp.callback_query(F.data.startswith("adm_"))
-async def admin_decision(c: types.CallbackQuery):
-    if c.from_user.id not in ADMIN_IDS: return await c.answer("Ви не адмін!", show_alert=True)
-    
-    act, _, uid, *info = c.data.split("_")
-    uid = int(uid)
-    if act == "ok":
-        amount = float(info[0])
-        await users_col.update_one({"user_id": uid}, {"$inc": {"balance_uah": amount, "total_bought": amount}})
-        await bot.send_message(uid, f"✅ Оплата {amount} грн підтверджена! Баланс поповнено.")
-        await c.message.edit_caption(caption=c.message.caption + "\n\n✅ СХВАЛЕНО")
-    else:
-        await bot.send_message(uid, "❌ Оплата відхилена.")
-        await c.message.edit_caption(caption=c.message.caption + "\n\n❌ ВІДХИЛЕНО")
-    await c.answer()
 
 @dp.message(Command("start"))
 async def cmd_start(m: types.Message, state: FSMContext):
