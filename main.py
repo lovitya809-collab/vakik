@@ -8,15 +8,18 @@ from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 from motor.motor_asyncio import AsyncIOMotorClient
+from aiocryptopay import AioCryptoPay, Networks
 
 # --- НАЛАШТУВАННЯ ---
 TOKEN = os.getenv("BOT_TOKEN")
 MONGO_URL = os.getenv("MONGO_URL")
 ADMIN_ID = os.getenv("ADMIN_ID")
+CRYPTO_TOKEN = os.getenv("CRYPTO_PAY_TOKEN")
 SUPPORT_LINK = "@YAKUZA_N3" 
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
+crypto = AioCryptoPay(token=CRYPTO_TOKEN, network=Networks.MAIN_NET)
 
 cluster = AsyncIOMotorClient(MONGO_URL)
 db = cluster["standoff_bot"]
@@ -85,10 +88,9 @@ def get_main_kb(lang):
     b.row(types.KeyboardButton(text=MESSAGES[lang]['profile']), types.KeyboardButton(text=MESSAGES[lang]['support']))
     return b.as_markup(resize_keyboard=True)
 
-# --- ХЕНДЛЕРИ МЕНЮ (ПЕРШОЧЕРГОВІ) ---
-
-@dp.message(F.text.in_([MESSAGES[l][k] for l in MESSAGES for k in ['profile', 'support', 'withdraw', 'calc', 'buy', 'sell', 'main_menu']]))
-async def menu_router(message: types.Message, state: FSMContext):
+# --- РОУТЕР МЕНЮ ---
+@dp.message(F.text.in_([MESSAGES[l][k] for l in MESSAGES for k in ['profile', 'support', 'withdraw', 'calc', 'buy', 'sell']]))
+async def menu_handler(message: types.Message, state: FSMContext):
     await state.clear()
     user = await users_col.find_one({"user_id": message.from_user.id})
     lang = user.get('lang', 'ua')
@@ -101,110 +103,116 @@ async def menu_router(message: types.Message, state: FSMContext):
             w_count=user.get('withdrawals_count', 0), friends=user.get('friends_count', 0), reg_date=user.get('reg_date', '--')
         )
         await message.answer(text, parse_mode="HTML")
-    
     elif txt == MESSAGES[lang]['support']:
         await message.answer(f"🆘 Зв'язок з адміністратором: {SUPPORT_LINK}")
-    
     elif txt == MESSAGES[lang]['withdraw']:
         await message.answer(MESSAGES[lang]['in_dev'])
-    
     elif txt == MESSAGES[lang]['calc']:
         b = InlineKeyboardBuilder()
         b.button(text=MESSAGES[lang]['calc_u_g'], callback_data="calc_u_g")
         b.button(text=MESSAGES[lang]['calc_g_u'], callback_data="calc_g_u")
         await message.answer(MESSAGES[lang]['calc_main'], reply_markup=b.adjust(1).as_markup(), parse_mode="HTML")
-
     elif txt == MESSAGES[lang]['buy']:
         await message.answer(MESSAGES[lang]['buy_title'], parse_mode="HTML")
         await state.set_state(ShopStates.waiting_for_buy_amount)
-
     elif txt == MESSAGES[lang]['sell']:
         await message.answer(MESSAGES[lang]['sell_title'], parse_mode="HTML")
         await state.set_state(ShopStates.waiting_for_sell_gold)
 
-# --- ОБРОБКА ВВЕДЕННЯ ЧИСЕЛ (FSM) ---
-
+# --- КУПІВЛЯ ТА CRYPTO PAY ---
 @dp.message(ShopStates.waiting_for_buy_amount)
-async def buy_process(message: types.Message, state: FSMContext):
+async def buy_input(message: types.Message, state: FSMContext):
     user = await users_col.find_one({"user_id": message.from_user.id})
     lang = user['lang']
-    if not message.text.isdigit():
-        return await message.answer("⚠️ Введіть суму числом!")
-    
+    if not message.text.isdigit(): return await message.answer("⚠️ Число!")
     uah = int(message.text)
-    if uah < 32:
-        return await message.answer(MESSAGES[lang]['buy_min_error'])
+    if uah < 32: return await message.answer(MESSAGES[lang]['buy_min_error'])
     
     gold = round(uah / 0.32, 2)
     b = InlineKeyboardBuilder()
-    b.button(text="💳 Карта", callback_data="m_c")
-    b.button(text="💎 Crypto Bot", callback_data="m_cr")
+    b.button(text="💎 Crypto Bot", callback_data=f"crypto_{uah}")
+    b.button(text="💳 Карта (Support)", url="https://t.me/YAKUZA_N3")
     await message.answer(MESSAGES[lang]['pay_confirm'].format(uah=uah, gold=gold), reply_markup=b.adjust(1).as_markup(), parse_mode="HTML")
     await state.clear()
 
+@dp.callback_query(F.data.startswith("crypto_"))
+async def create_invoice(callback: types.CallbackQuery):
+    uah = float(callback.data.split("_")[1])
+    try:
+        invoice = await crypto.create_invoice(amount=uah, asset='USDT', currency_type='fiat', fiat='UAH')
+        b = InlineKeyboardBuilder()
+        b.button(text="💳 Оплатити", url=invoice.pay_url)
+        b.button(text="✅ Перевірити оплату", callback_data=f"verify_{invoice.invoice_id}_{uah}")
+        await callback.message.edit_text(f"🚀 <b>Рахунок створено!</b>\nСума: {uah} UAH\nОплатіть за посиланням нижче:", reply_markup=b.adjust(1).as_markup(), parse_mode="HTML")
+    except:
+        await callback.answer("❌ Помилка API Crypto Bot", show_alert=True)
+
+@dp.callback_query(F.data.startswith("verify_"))
+async def verify_pay(callback: types.CallbackQuery):
+    _, inv_id, uah = callback.data.split("_")
+    inv = await crypto.get_invoices(invoice_ids=int(inv_id))
+    if inv and inv.status == 'paid':
+        await users_col.update_one({"user_id": callback.from_user.id}, {"$inc": {"balance_uah": float(uah), "total_bought": float(uah)}})
+        await callback.message.answer(f"✅ <b>Баланс поповнено на {uah} грн!</b>", parse_mode="HTML")
+        await callback.message.delete()
+    else:
+        await callback.answer("⏳ Оплата не знайдена", show_alert=True)
+
+# --- ПРОДАЖ ---
 @dp.message(ShopStates.waiting_for_sell_gold)
-async def sell_process(message: types.Message, state: FSMContext):
-    user = await users_col.find_one({"user_id": message.from_user.id})
-    lang = user['lang']
-    if not message.text.isdigit():
-        return await message.answer("⚠️ Введіть кількість числом!")
-    
+async def sell_input(message: types.Message, state: FSMContext):
+    if not message.text.isdigit(): return await message.answer("⚠️ Число!")
     gold = int(message.text)
-    if gold < 100:
-        return await message.answer(MESSAGES[lang]['sell_title'], parse_mode="HTML")
-    
+    if gold < 100: return await message.answer("❌ Мінімум 100 голди!")
+    user = await users_col.find_one({"user_id": message.from_user.id})
     uah = round(gold * 0.22, 2)
-    await message.answer(MESSAGES[lang]['sell_confirm'].format(gold=gold, uah=uah), parse_mode="HTML")
+    await message.answer(MESSAGES[user['lang']]['sell_confirm'].format(gold=gold, uah=uah), parse_mode="HTML")
     await state.clear()
 
-# --- КАЛЬКУЛЯТОР (CALLBACKS) ---
-
+# --- КАЛЬКУЛЯТОР ---
 @dp.callback_query(F.data == "calc_u_g")
-async def calc_ug(callback: types.CallbackQuery, state: FSMContext):
-    user = await users_col.find_one({"user_id": callback.from_user.id})
-    await callback.message.answer(MESSAGES[user['lang']]['enter_uah'])
+async def c_ug(c: types.CallbackQuery, state: FSMContext):
+    user = await users_col.find_one({"user_id": c.from_user.id})
+    await c.message.answer(MESSAGES[user['lang']]['enter_uah'])
     await state.set_state(ShopStates.calc_uah_to_gold)
-    await callback.answer()
+    await c.answer()
 
 @dp.callback_query(F.data == "calc_g_u")
-async def calc_gu(callback: types.CallbackQuery, state: FSMContext):
-    user = await users_col.find_one({"user_id": callback.from_user.id})
-    await callback.message.answer(MESSAGES[user['lang']]['enter_gold'])
+async def c_gu(c: types.CallbackQuery, state: FSMContext):
+    user = await users_col.find_one({"user_id": c.from_user.id})
+    await c.message.answer(MESSAGES[user['lang']]['enter_gold'])
     await state.set_state(ShopStates.calc_gold_to_uah)
-    await callback.answer()
+    await c.answer()
 
 @dp.message(ShopStates.calc_uah_to_gold)
-async def res_ug(message: types.Message, state: FSMContext):
-    if not message.text.isdigit(): return await message.answer("⚠️ Число!")
-    res = round(int(message.text) / 0.32, 2)
-    await message.answer(f"✅ <b>{message.text}.00грн</b> ≈ <b>{res}G</b>", parse_mode="HTML")
+async def r_ug(m: types.Message, state: FSMContext):
+    if not m.text.isdigit(): return
+    await m.answer(f"✅ {m.text}грн ≈ {round(int(m.text)/0.32, 2)}G")
     await state.clear()
 
 @dp.message(ShopStates.calc_gold_to_uah)
-async def res_gu(message: types.Message, state: FSMContext):
-    if not message.text.isdigit(): return await message.answer("⚠️ Число!")
-    res = round(int(message.text) * 0.32, 2)
-    await message.answer(f"✅ <b>{message.text}G</b> ≈ <b>{res}грн</b>", parse_mode="HTML")
+async def r_gu(m: types.Message, state: FSMContext):
+    if not m.text.isdigit(): return
+    await m.answer(f"✅ {m.text}G ≈ {round(int(m.text)*0.32, 2)}грн")
     await state.clear()
 
-# --- СИСТЕМНІ ---
-
+# --- СТАРТ ---
 @dp.message(Command("start"))
-async def cmd_start(message: types.Message, state: FSMContext):
+async def start(m: types.Message, state: FSMContext):
     await state.clear()
-    user = await users_col.find_one({"user_id": message.from_user.id})
+    user = await users_col.find_one({"user_id": m.from_user.id})
     if not user:
-        await users_col.insert_one({"user_id": message.from_user.id, "lang": "ua", "balance_uah": 0.0, "total_bought": 0.0, "total_withdrawn": 0.0, "withdrawals_count": 0, "friends_count": 0, "reg_date": datetime.now().strftime("%d.%m.%Y")})
+        await users_col.insert_one({"user_id": m.from_user.id, "lang": "ua", "balance_uah": 0.0, "total_bought": 0.0, "total_withdrawn": 0.0, "withdrawals_count": 0, "friends_count": 0, "reg_date": datetime.now().strftime("%d.%m.%Y")})
     b = InlineKeyboardBuilder()
     for l in ['ua', 'ru', 'en']: b.button(text=l.upper(), callback_data=f"setlang_{l}")
-    await message.answer("Оберіть мову / Выберите язык / Choose language:", reply_markup=b.as_markup())
+    await m.answer("Мова / Язык / Language:", reply_markup=b.as_markup())
 
 @dp.callback_query(F.data.startswith("setlang_"))
-async def set_lang(callback: types.CallbackQuery):
-    lang = callback.data.split("_")[1]
-    await users_col.update_one({"user_id": callback.from_user.id}, {"$set": {"lang": lang}})
-    await callback.message.delete()
-    await callback.message.answer(MESSAGES[lang]['main_menu'], reply_markup=get_main_kb(lang))
+async def set_l(c: types.CallbackQuery):
+    lang = c.data.split("_")[1]
+    await users_col.update_one({"user_id": c.from_user.id}, {"$set": {"lang": lang}})
+    await c.message.delete()
+    await c.message.answer(MESSAGES[lang]['main_menu'], reply_markup=get_main_kb(lang))
 
 async def main():
     await dp.start_polling(bot)
